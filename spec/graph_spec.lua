@@ -1,0 +1,10 @@
+local luastar = require("../luastar")
+
+describe('Graph', function()
+    it(":create", function()
+        local graph = luastar.newGraph({{0,0}})
+        assert.truthy(graph)
+        assert.truthy(graph.dirtyNodes)
+        assert.truthy(graph.grid)
+    end)
+end)

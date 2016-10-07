@@ -1,11 +1,11 @@
 local luastar = {
     _VERSION     = 'luastar v0.0.1',
-    _URL         = '',
-    _DESCRIPTION = ''
+    _URL         = 'https://github.com/mpicard/luastar',
+    _DESCRIPTION = 'A* pathfinding algorithm for Lua',
     _LICENSE     = [[
     MIT LICENSE
 
-    Copyright (c) 2014 Martin Picard
+    Copyright (c) 2016 Martin Picard
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the
@@ -28,36 +28,38 @@ local luastar = {
   ]]
 }
 
-local Astar = {}
-local Astar_mt = {__index = Astar}
-
-local Graph = {}
-local Graph_mt = {__index = Graph}
-
-local BinaryHeap = {}
-local BinaryHeap_mt = {__index = BinaryHeap}
-
-
+-- Helper functions
 function table:indexOf(value)
     for i, v in ipairs(self) do
         if v == value then return i end
     end
 end
 
-local function pathTo(node)
-    local curr = node
-    local path = {}
-    while curr.parent do
-        table.insert(path, 1, curr)
-        curr = curr.parent
-    end
-    return path
-end
+local Astar = {}
+local Astar_mt = {__index = Astar}
 
-local function getHeap()
-    return BinaryHeap(
-        function(node) return node.f end
-    )
+Astar.heuristics = {
+    manhattan = function(p0, p1)
+        local d1 = math.abs(p1.x - p0.x)
+        local d2 = math.abs(p1.y - p0.y)
+        return d1 + d2
+        end,
+    diagonal = function(p0, p1)
+        local D = 1
+        local D2 = math.sqrt(2)
+        local d1 = math.abs(p1.x - p0.x)
+        local d2 = math.abs(p1.y - p1.y)
+        return (D * (d1 + d2)) + ((D2 - (2 * D)) * math.min(d1, d2))
+        end,
+}
+
+function Astar:cleanNode(node)
+    node.f = 0
+    node.g = 0
+    node.h = 0
+    node.visited = false
+    node.closed = false
+    node.parent = nil
 end
 
 function Astar:search(graph, start, goal, options)
@@ -132,11 +134,8 @@ function Astar:search(graph, start, goal, options)
     return {}
 end
 
-local function getHeap()
-    return BinaryHeap(function(node)
-        return node.f
-    end)
-end
+local Graph = {}
+local Graph_mt = {__index = Graph}
 
 function Graph:clean()
     for i,node in ipairs(self.dirtyNodes) do
@@ -145,10 +144,87 @@ function Graph:clean()
     self.dirtyNodes = {}
 end
 
-function BinaryHeap:initialize(scoreFunction)
-    self.content = {}
-    self.scoreFunction = scoreFunction
+function Graph:markDirty(node)
+    table.insert(self.dirtyNodes, node)
 end
+
+function Graph:neighbour(node)
+    local results = {}
+    local x, y = node.x, node.y
+    local grid = self.grid
+    -- north
+    if grid[x] and grid[x][y+1] then
+        table.insert(results, grid[x][y+1])
+    end
+    -- south
+    if grid[x] and grid[x][y-1] then
+        table.insert(results, grid[x][y-1])
+    end
+    -- east
+    if grid[x+1] and grid[x+1][y] then
+        table.insert(results, grid[x+1][y])
+    end
+    -- west
+    if grid[x-1] and grid[x-1][y] then
+        table.insert(results, grid[x-1][y])
+    end
+
+    if self.diagonal then
+        -- north east
+        if grid[x+1] and grid[x+1][y+1] then
+            table.insert(results, grid[x+1][y+1])
+        end
+        -- south east
+        if grid[x+1] and grid[x+1][y-1] then
+            table.insert(results, grid[x+1][y-1])
+        end
+        -- north west
+        if grid[x-1] and grid[x-1][y+1] then
+            table.insert(results, grid[x-1][y+1])
+        end
+        -- South west
+        if grid[x-1] and grid[x-1][y-1] then
+            table.insert(results, grid[x-1][y-1])
+        end
+    end
+
+    return results
+end
+
+function Graph:toString()
+    local debug = {}
+    for _, row in ipairs(self.grid) do
+        table.insert(debug, table.concat(row, ", "))
+    end
+    return table.concat(debug, '\n')
+end
+
+function getGraph(initialGrid, options)
+    local graph = setmetatable({
+        nodes = {},
+        grid = {},
+        dirtyNodes = {},
+        diagonal = options.diagonal
+    }, Graph_mt)
+
+    for _, x in ipairs(initialGrid) do
+        graph.grid[x] = {}
+        for _, y in ipairs(initialGrid[x]) do
+            local node = getGridNode(x, y, initialGrid[x][y])
+            graph.grid[x][y] = node
+            table.insert(graph.nodes, node)
+        end
+    end
+
+    for _, node in ipairs(graph.nodes) do
+        Astar:clean(node)
+    end
+
+    return graph
+end
+
+local BinaryHeap = {}
+local BinaryHeap_mt = {__index = BinaryHeap}
 
 function BinaryHeap:push(element)
     table.insert(self.content, element)
@@ -247,6 +323,72 @@ function BinaryHeap:bubbleUp(n)
         -- otherwise bubbleUp done
         else break end
     end
+end
+
+local function pathTo(node)
+    local curr = node
+    local path = {}
+    while curr.parent do
+        table.insert(path, 1, curr)
+        curr = curr.parent
+    end
+    return path
+end
+
+function getHeap(scoreFunction)
+    if not scoreFunction then
+        scoreFunction = function(node) return node.f end
+    end
+    local bh = setmetatable({
+        content       = {},
+        scoreFunction = scoreFunction
+    }, BinaryHeap_mt)
+    return bh
+end
+
+local GridNode = {}
+local GridNode_mt = {__index = GridNode}
+
+local function getGridNode(x, y, weight)
+    return {x = x, y = y, weight = weight}
+end
+
+function GridNode:toString()
+    return string.format("<%s , %s>", self.x, self.y)
+end
+
+function GridNode:getCost(fromNeighbour)
+    if fromNeighbour and fromNeighbour.x ~= self.x and fromNeighbour.y ~= self.y then
+        return self.weight * math.sqrt(2)
+    end
+    return self.weight
+end
+
+function GridNode:isWall()
+    return self.weight == 0
+end
+
+-- Public library function
+
+luastar.newPath = function(graph, start, goal, options)
+
+    local astar = setmetatable({
+        graph   = graph,
+        start   = start,
+        goal    = goal,
+        options = options
+    }, Astar_mt)
+
+    return astar
+end
+
+luastar.newHeap = function()
+    -- mostly for testing
+    return getHeap()
+end
+
+luastar.newGraph = function(initialGrid, options)
+    return getGraph(initialGrid, options)
 end
 
 return luastar
